@@ -1,0 +1,7 @@
+{
+  "name": "CLJHBA 大宗团体承保系统",
+  "description": "An intelligent customer service agent with policy query capabilities and risk controls.",
+  "requestFramePermissions": [
+    "microphone"
+  ]
+}
