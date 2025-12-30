@@ -1,9 +1,25 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import ChatWidget from './components/ChatWidget';
 import SupervisorDashboard from './components/SupervisorDashboard';
+import * as Sentry from '@sentry/browser';
+import { loadRiskWordsRemote } from './utils/riskControl';
 
 const App: React.FC = () => {
   const [isAdminMode, setIsAdminMode] = useState(false);
+
+  useEffect(() => {
+    if (import.meta.env.VITE_SENTRY_DSN) {
+      Sentry.init({
+        dsn: import.meta.env.VITE_SENTRY_DSN,
+        tracesSampleRate: 0.1,
+      });
+    }
+
+    const remoteUrl = import.meta.env.VITE_RISK_WORDS_URL;
+    if (remoteUrl) {
+      loadRiskWordsRemote(remoteUrl);
+    }
+  }, []);
 
   // Hidden admin toggle handler
   const handleAdminEntry = (e: React.MouseEvent) => {

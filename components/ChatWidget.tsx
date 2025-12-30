@@ -1,9 +1,9 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo, Suspense } from 'react';
 import { Message, Role } from '../types';
 import ChatMessage from './ChatMessage';
-import VoiceCallInterface from './VoiceCallInterface';
-import { containsRiskContent, getStaticAnswer } from '../utils/riskControl';
+import { containsRiskContent, getStaticAnswer, ensureWithinRateLimit } from '../utils/riskControl';
 import { sendMessageToGemini } from '../services/geminiService';
+import { Virtuoso } from 'react-virtuoso';
 
 const FAQ_QUESTIONS = [
   "我邮箱收到的电子保单是乱码",
@@ -21,6 +21,7 @@ const QUICK_ACTIONS = [
 ];
 
 const TABS = ['平台功能', '车险理赔', '承保问题', '车船税'];
+const VoiceCallInterface = React.lazy(() => import('./VoiceCallInterface'));
 
 const ChatWidget: React.FC = () => {
   const [isOpen, setIsOpen] = useState(false);
@@ -30,6 +31,7 @@ const ChatWidget: React.FC = () => {
   
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+  const [inputError, setInputError] = useState<string | null>(null);
   const [messages, setMessages] = useState<Message[]>([]); // Start empty, dashboard acts as welcome
   
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -44,10 +46,26 @@ const ChatWidget: React.FC = () => {
     }
   }, [messages, isOpen, isVoiceMode, viewState]);
 
+  const memoizedMessages = useMemo(() => messages, [messages]);
+
   // Handle sending a message (text input or FAQ click)
   const handleSendMessage = async (textOverride?: string) => {
     const textToSend = textOverride || input.trim();
     if (!textToSend) return;
+    if (!textOverride && inputError) return;
+
+    const canSend = await ensureWithinRateLimit('anon');
+    if (!canSend) {
+      const riskMsg: Message = {
+        id: Date.now().toString(),
+        role: Role.MODEL,
+        content: "发送过于频繁，请稍后再试。",
+        timestamp: new Date(),
+        isError: true
+      };
+      setMessages(prev => [...prev, riskMsg]);
+      return;
+    }
 
     // Switch to chat view immediately
     setViewState('chat');
@@ -160,7 +178,9 @@ const ChatWidget: React.FC = () => {
 
           {/* Content Area */}
           {isVoiceMode ? (
-            <VoiceCallInterface onHangup={() => setIsVoiceMode(false)} />
+            <Suspense fallback={<div className="flex-1 flex items-center justify-center text-gray-500 text-sm">语音界面加载中...</div>}>
+              <VoiceCallInterface onHangup={() => setIsVoiceMode(false)} />
+            </Suspense>
           ) : (
             <div className="flex-1 overflow-y-auto scrollbar-hide relative bg-gray-100">
                 
@@ -220,6 +240,7 @@ const ChatWidget: React.FC = () => {
                                     {FAQ_QUESTIONS.map((q, idx) => (
                                         <button 
                                             key={idx}
+                                            data-testid="faq-item"
                                             onClick={() => handleFAQClick(q)}
                                             className="w-full text-left px-4 py-3 text-sm text-gray-700 hover:bg-gray-50 rounded-lg flex justify-between items-center group transition-colors border-b border-gray-50 last:border-0"
                                         >
@@ -244,15 +265,21 @@ const ChatWidget: React.FC = () => {
                 {viewState === 'chat' && (
                     <div className="p-4 pb-20 min-h-full">
                         {/* Default Welcomer if empty */}
-                        {messages.length === 0 && (
+                        {memoizedMessages.length === 0 && !isLoading && (
                             <div className="text-center py-8 opacity-50">
                                 <p className="text-sm">Start chatting with the assistant...</p>
                             </div>
                         )}
                         
-                        {messages.map((msg) => (
-                            <ChatMessage key={msg.id} message={msg} />
-                        ))}
+                        <Virtuoso
+                          data={memoizedMessages}
+                          style={{ height: '100%' }}
+                          itemContent={(_, msg) => <ChatMessage key={msg.id} message={msg} />}
+                          followOutput="smooth"
+                          atBottomStateChange={(atBottom) => {
+                            if (atBottom) scrollToBottom();
+                          }}
+                        />
 
                         {isLoading && (
                             <div className="flex justify-start mb-4">
@@ -288,21 +315,37 @@ const ChatWidget: React.FC = () => {
                     <div className="flex-1 relative">
                         <input
                             type="text"
+                            data-testid="chat-input"
                             className="w-full bg-gray-100 text-gray-800 rounded-lg pl-4 pr-12 py-2.5 text-sm focus:outline-none focus:ring-1 focus:ring-emerald-500 transition-all placeholder:text-gray-400"
                             placeholder="请输入您要咨询的问题"
                             value={input}
-                            onChange={(e) => setInput(e.target.value)}
+                            onChange={(e) => {
+                              const next = e.target.value;
+                              setInput(next);
+                              if (!next.trim()) setInputError('请输入要咨询的内容');
+                              else if (next.length > 300) setInputError('最多 300 字以内');
+                              else setInputError(null);
+                            }}
                             onKeyDown={handleKeyDown}
                             disabled={isLoading}
                         />
+                        {inputError && (
+                          <div className="absolute -bottom-5 left-1 text-xs text-red-500">{inputError}</div>
+                        )}
                     </div>
 
                     <button 
+                        data-testid="chat-send"
                         onClick={() => handleSendMessage()}
-                        disabled={!input.trim() || isLoading}
-                        className="px-4 py-1.5 bg-emerald-200 text-emerald-800 rounded-lg text-sm font-medium hover:bg-emerald-300 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                        disabled={!input.trim() || isLoading || !!inputError}
+                        className="px-4 py-1.5 bg-emerald-200 text-emerald-800 rounded-lg text-sm font-medium hover:bg-emerald-300 disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex items-center gap-2"
                     >
-                        发送
+                        {isLoading ? (
+                          <>
+                            <span className="w-3 h-3 border-2 border-emerald-700 border-t-transparent rounded-full animate-spin" />
+                            发送中...
+                          </>
+                        ) : '发送'}
                     </button>
                     
                     <button className="w-8 h-8 text-gray-400 hover:text-gray-600 rounded-full hover:bg-gray-100 flex items-center justify-center transition-colors">
@@ -318,6 +361,7 @@ const ChatWidget: React.FC = () => {
       {/* Launcher Button */}
       {!isOpen && (
         <button
+          data-testid="chat-launcher"
           onClick={() => setIsOpen(true)}
           className="w-16 h-16 bg-gradient-to-tr from-emerald-600 to-teal-500 hover:from-emerald-500 hover:to-teal-400 text-white rounded-full shadow-2xl flex items-center justify-center transition-all hover:scale-105 active:scale-95 group border-2 border-white/20"
         >

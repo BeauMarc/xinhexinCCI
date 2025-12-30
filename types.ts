@@ -20,3 +20,19 @@ export interface PolicyData {
   type: string;
   vehicleCount: number;
 }
+
+export interface IntentDefinition {
+  id: string;
+  name: string;
+  keywords: string[];
+  threshold: number; // 0-1
+}
+
+export interface IntentMatch {
+  id: string;
+  name: string;
+  confidence: number; // 0-1
+  matchedKeywords: string[];
+  modelToUse: string;
+  usedFallback: boolean;
+}

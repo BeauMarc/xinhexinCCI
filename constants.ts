@@ -1,6 +1,7 @@
 import { PolicyData } from './types';
 
 // 1. Risk Control: Forbidden words that trigger immediate fallback
+// 动态风险词默认值（可远程更新）
 export const RISK_WORDS = [
   'gamble', 'betting', 'illegal', 'hack', 'violence', 'kill', 'scam', 
   'bribe', 'laundering'
